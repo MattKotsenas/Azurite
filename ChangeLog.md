@@ -4,6 +4,10 @@
 
 ## Upcoming Release
 
+General:
+
+- Add `AZURITE_ACCOUNTS_FILE` to load custom storage account names and keys from a file. When set, it takes precedence over `AZURITE_ACCOUNTS` and is reloaded immediately on `SIGHUP` instead of polling on an interval; a failed reload keeps the currently loaded accounts.
+
 ## 2026.06 Version 3.36.0
 
 General:

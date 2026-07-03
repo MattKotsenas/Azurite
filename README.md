@@ -529,6 +529,20 @@ set AZURITE_ACCOUNTS=account1:key1:key2;account2:key1:key2
 
 Azurite will refresh customized account name and key from environment variable every minute by default. With this feature, we can dynamically rotate account key, or add new storage accounts on the air without restarting Azurite instance.
 
+Alternatively, you can provide the same `account1:key1[:key2];account2:key1[:key2];...` string in a file and point Azurite at it with the environment variable `AZURITE_ACCOUNTS_FILE`:
+
+```cmd
+set AZURITE_ACCOUNTS_FILE=/run/secrets/azurite-accounts
+```
+
+`AZURITE_ACCOUNTS_FILE` takes precedence over `AZURITE_ACCOUNTS`. When it is set, Azurite reloads the accounts from the file immediately whenever it receives a `SIGHUP` signal, rather than polling on an interval. This makes it easy to add storage accounts or rotate keys on the fly - for example when the file is a mounted secret managed by another process - without restarting Azurite:
+
+```bash
+kill -HUP <azurite-pid>          # or, for a container: docker kill --signal=HUP <container>
+```
+
+If the file cannot be read or parsed during a reload, Azurite keeps the accounts it already has so a transient or malformed write does not drop live accounts. If the file cannot be read at startup, Azurite fails to start rather than silently falling back to the default `devstoreaccount1` account.
+
 > Note. Default storage account `devstoreaccount1` will be disabled when providing customized storage accounts.
 
 > Note. The account keys must be base64 encoded string.
