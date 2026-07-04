@@ -27,8 +27,6 @@ import {
   EMULATOR_ACCOUNT_KEY_STR,
   EMULATOR_ACCOUNT_NAME
 } from "../../src/blob/utils/constants";
-import { URLBuilder } from "@azure/ms-rest-js";
-
 const EMULATOR_ACCOUNT2_NAME = "devstoreaccount2";
 const EMULATOR_ACCOUNT2_KEY_STR =
   "MTAwCjE2NQoyMjUKMTAzCjIxOAoyNDEKNDAKNzgKMTkxCjE3OAoyMTQKMTY5CjIxMwo2MQoyNTIKMTQxCg==";
@@ -1833,13 +1831,13 @@ describe("Shared Access Signature (SAS) authentication", () => {
     assert.equal(fileBuffer.toString(), "hello");
   });
 
-  it("Copy blob across accounts should error if hosts mismatch @loki @sql", async () => {
-    const now = new Date();
-    now.setMinutes(now.getMinutes() - 5); // Skip clock skew with server
-
-    const tmr = new Date();
-    tmr.setDate(tmr.getDate() + 1);
-
+  it("Copy blob across accounts should error if the source account is not on this instance @loki @sql", async () => {
+    // The source *account* - not the request host or port - identifies the Azurite instance. A copy
+    // source that names an account this instance does not serve is still rejected, preserving
+    // same-instance-only copy semantics even though the host-equality check has been relaxed (which is
+    // what enables the production-style and mapped-port copies proven below). Here the container/blob
+    // exist under devstoreaccount1, but the copy source names a different, unknown account, so the copy
+    // must fail on the account, not resolve to the local blob.
     const containerName = getUniqueName("con");
     const sourceContainerClient = serviceClient.getContainerClient(
       containerName
@@ -1855,17 +1853,137 @@ describe("Shared Access Signature (SAS) authentication", () => {
     await sourceBlob.upload("hello", 5);
 
     const targetBlob = targetContainerClient.getBlockBlobClient(blobName);
-    const sourceUriBuilder = URLBuilder.parse(sourceBlob.url);
-    sourceUriBuilder.setHost("somewhereelse");
+    const foreignAccount = "notonthisinstance";
+    assert.notEqual(
+      foreignAccount,
+      EMULATOR_ACCOUNT_NAME,
+      "precondition: the copy-source account must not be an account this instance serves"
+    );
+    const foreignSource = `http://${foreignAccount}.blob.localhost:${server.config.port}/${containerName}/${blobName}`;
 
     let error;
     try {
-      await targetBlob.beginCopyFromURL(sourceUriBuilder.toString());
+      await targetBlob.beginCopyFromURL(foreignSource);
     } catch (err) {
       error = err;
     }
-    assert.deepEqual(error.statusCode, 404);
     assert.ok(error !== undefined);
+    assert.equal(error.details.code, "CannotVerifyCopySource");
+  });
+
+  it("Copy blob across accounts should work when the copy source is production-style @loki @sql", async () => {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - 5); // Skip clock skew with server
+
+    const tmr = new Date();
+    tmr.setDate(tmr.getDate() + 1);
+
+    const sourceStorageSharedKeyCredential = (serviceClient as any).credential;
+
+    const containerName = getUniqueName("con");
+    const sourceContainerClient = serviceClient.getContainerClient(
+      containerName
+    );
+    const targetContainerClient = serviceClient2.getContainerClient(
+      containerName
+    );
+    await sourceContainerClient.create();
+    await targetContainerClient.create();
+
+    const blobName = getUniqueName("blob");
+    const sas = generateBlobSASQueryParameters(
+      {
+        containerName,
+        blobName,
+        expiresOn: tmr,
+        ipRange: { start: "0.0.0.0", end: "255.255.255.255" },
+        permissions: BlobSASPermissions.parse("r"),
+        protocol: SASProtocol.HttpsAndHttp,
+        startsOn: now,
+        version: "2016-05-31"
+      },
+      sourceStorageSharedKeyCredential as StorageSharedKeyCredential
+    ).toString();
+
+    const sourceBlob = sourceContainerClient.getBlockBlobClient(blobName);
+    await sourceBlob.upload("hello", 5);
+
+    // Production-style copy source: the account is in the host, not the path, so the source host differs
+    // from the (path-style) destination request host. That difference previously failed the
+    // host-equality check and returned 404. The host also uses the reserved ".invalid" TLD, which never
+    // resolves in DNS, so a successful copy additionally proves the source host is never contacted - the
+    // (served) account alone identifies the local instance.
+    const productStyleHost = `${EMULATOR_ACCOUNT_NAME}.blob.core.invalid`;
+    assert.notEqual(
+      productStyleHost,
+      `${server.config.host}:${server.config.port}`,
+      "precondition: the production-style source host must differ from the destination host so the previously-failing path is exercised"
+    );
+    const productStyleSource = `http://${productStyleHost}/${containerName}/${blobName}?${sas}`;
+
+    const targetBlob = targetContainerClient.getBlockBlobClient(blobName);
+    const operation = await targetBlob.beginCopyFromURL(productStyleSource);
+    const copyResponse = await operation.pollUntilDone();
+    assert.equal("success", copyResponse.copyStatus);
+    const fileBuffer = await targetBlob.downloadToBuffer();
+    assert.equal(fileBuffer.toString(), "hello");
+  });
+
+  it("Copy blob across accounts should work when the copy source uses a mapped port @loki @sql", async () => {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - 5); // Skip clock skew with server
+
+    const tmr = new Date();
+    tmr.setDate(tmr.getDate() + 1);
+
+    const sourceStorageSharedKeyCredential = (serviceClient as any).credential;
+
+    const containerName = getUniqueName("con");
+    const sourceContainerClient = serviceClient.getContainerClient(
+      containerName
+    );
+    const targetContainerClient = serviceClient2.getContainerClient(
+      containerName
+    );
+    await sourceContainerClient.create();
+    await targetContainerClient.create();
+
+    const blobName = getUniqueName("blob");
+    const sas = generateBlobSASQueryParameters(
+      {
+        containerName,
+        blobName,
+        expiresOn: tmr,
+        ipRange: { start: "0.0.0.0", end: "255.255.255.255" },
+        permissions: BlobSASPermissions.parse("r"),
+        protocol: SASProtocol.HttpsAndHttp,
+        startsOn: now,
+        version: "2016-05-31"
+      },
+      sourceStorageSharedKeyCredential as StorageSharedKeyCredential
+    ).toString();
+
+    const sourceBlob = sourceContainerClient.getBlockBlobClient(blobName);
+    await sourceBlob.upload("hello", 5);
+
+    // Copy source addressed on a different (externally-mapped) port than the one this instance listens
+    // on, as happens when Azurite is published on a random container port behind a proxy. The advertised
+    // port is not reachable from within the process, so validating the source verbatim previously failed;
+    // the instance now validates over loopback on its own listening port instead.
+    const mappedPort = server.config.port + 100;
+    assert.notEqual(
+      mappedPort,
+      server.config.port,
+      "precondition: the copy-source port must differ from the port this instance listens on"
+    );
+    const mappedPortSource = `http://${server.config.host}:${mappedPort}/${EMULATOR_ACCOUNT_NAME}/${containerName}/${blobName}?${sas}`;
+
+    const targetBlob = targetContainerClient.getBlockBlobClient(blobName);
+    const operation = await targetBlob.beginCopyFromURL(mappedPortSource);
+    const copyResponse = await operation.pollUntilDone();
+    assert.equal("success", copyResponse.copyStatus);
+    const fileBuffer = await targetBlob.downloadToBuffer();
+    assert.equal(fileBuffer.toString(), "hello");
   });
 
   it("Copy blob across accounts should succeed for public blob access @loki @sql", async () => {

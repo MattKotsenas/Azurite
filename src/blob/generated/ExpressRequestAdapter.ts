@@ -60,4 +60,8 @@ export default class ExpressRequestAdapter implements IRequest {
   public getProtocol(): string {
     return this.req.protocol;
   }
+
+  public getLocalPort(): number | undefined {
+    return this.req.socket?.localPort;
+  }
 }
