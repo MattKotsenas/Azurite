@@ -4,6 +4,10 @@
 
 ## Upcoming Release
 
+Table:
+
+- Fix table `$batch` operations failing with HTTP 500 ("Couldn't extract path from URL in sub-Request") when the batch is addressed production-style (account in the host, e.g. `https://{account}.table.{host}/{table}`). The sub-request URL parser assumed path-style (`/{account}/{table}`) addressing; it now handles both styles.
+
 ## 2026.06 Version 3.36.0
 
 General:

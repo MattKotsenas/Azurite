@@ -69,11 +69,28 @@ export class BatchSerialization {
   }
 
   /**
-   * Extracts the path from a URI
-   * @param uriString
-   * @returns just the path
+   * Extracts the resource path from a batch sub-request URI. The table name is
+   * returned in capture group 1 (used by the deserializer as the operation's
+   * table). Supports both addressing styles that Storage clients emit:
+   *   - path-style       : http://host:port/{account}/{table}(...)  (dev-storage / IP endpoints)
+   *   - production-style  : https://{account}.table.host/{table}(...) (account in the host)
+   * @param uriString the full sub-request URI
+   * @returns the regex match (group [1] = table name), or null when none is found
    */
   public extractPath(uriString: string) {
-    return uriString.match(/\/\w+\/(\w+)/);
+    // Path-style: the account precedes the table in the path (/{account}/{table}).
+    const pathStyle = uriString.match(/\/\w+\/(\w+)/);
+    if (pathStyle !== null) {
+      return pathStyle;
+    }
+
+    // Production-style: the account is in the host, so the path has a single
+    // segment (/{table}). Strip the scheme + authority, then capture the table
+    // name at the start of the path; it ends at the entity-key '(', the query
+    // '?', or the path end. Anchoring to the path start avoids matching a later
+    // segment for a malformed URL that has no table segment.
+    return uriString
+      .replace(/^https?:\/\/[^/]+/i, "")
+      .match(/^\/(\w+)(?=\(|\?|$)/);
   }
 }
