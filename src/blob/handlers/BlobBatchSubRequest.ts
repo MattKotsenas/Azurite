@@ -76,6 +76,11 @@ export class BlobBatchSubRequest implements IRequest {
     return this.urlbuilder.getScheme()!;
   }
 
+  public getLocalPort(): number | undefined {
+    // Batch sub-requests are parsed from a request body and are not bound to a socket.
+    return undefined;
+  }
+
   public setHeader(key: string, value: string | string[] | undefined) {
     this.headers[key.toLowerCase()] = value;
   }

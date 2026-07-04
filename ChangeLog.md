@@ -12,6 +12,10 @@ Table:
 
 - Fix table `$batch` operations failing with HTTP 500 ("Couldn't extract path from URL in sub-Request") when the batch is addressed production-style (account in the host, e.g. `https://{account}.table.{host}/{table}`). The sub-request URL parser assumed path-style (`/{account}/{table}`) addressing; it now handles both styles.
 
+Blob:
+
+- Fix cross-account (same-instance) `Copy Blob` / `Copy Blob From URL` failing when the copy source is addressed production-style (account in the host) or references a port that is not reachable from within the Azurite process (for example when Azurite is published on a mapped/random container port or sits behind a reverse proxy). The copy-source access check no longer requires the source host to equal the destination request host and no longer fetches the copy source verbatim; it validates over loopback on the instance's own listening port using a path-style URL derived from the source account. Same-instance-only copy semantics are preserved: a copy source naming an account this instance does not serve is still rejected.
+
 ## 2026.06 Version 3.36.0
 
 General:

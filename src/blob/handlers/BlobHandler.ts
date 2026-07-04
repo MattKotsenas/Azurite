@@ -1,7 +1,9 @@
 import { URLBuilder } from "@azure/ms-rest-js";
-import axios, { AxiosResponse } from "axios";
+import axios, { AxiosRequestConfig, AxiosResponse } from "axios";
+import * as https from "https";
 import { URL } from "url";
 
+import { IP_REGEX, NO_ACCOUNT_HOST_NAMES } from "../../common/utils/constants";
 import IExtentStore from "../../common/persistence/IExtentStore";
 import {
   convertRawHeadersToMetadata,
@@ -699,42 +701,88 @@ export default class BlobHandler extends BaseHandler implements IBlobHandler {
   }
 
   private async validateCopySource(copySource: string, sourceAccount: string, context: Context): Promise<void> {
-    // Currently the only cross-account copy support is from/to the same Azurite instance. In either case access
-    // is determined by performing a request to the copy source to see if the authentication is valid.
+    // Currently the only cross-account copy support is from/to the same Azurite instance. Access is
+    // determined by re-issuing the source request against this instance and checking that the
+    // authentication (shared key / SAS / public access) is valid.
     const blobCtx = new BlobStorageContext(context);
-
-    const currentServer = blobCtx.request!.getHeader("Host") || "";
     const url = this.NewUriFromCopySource(copySource, context);
-    if (currentServer !== url.host) {
-      this.logger.error(
-        `BlobHandler:startCopyFromURL() Source account ${url} is not on the same Azurite instance as target account ${blobCtx.account}`,
-        context.contextId
-      );
-
-      throw StorageErrorFactory.getCannotVerifyCopySource(
-        context.contextId!,
-        404,
-        "The specified resource does not exist"
-      );
-    }
 
     this.logger.debug(
       `BlobHandler:startCopyFromURL() Validating access to the source account ${sourceAccount}`,
       context.contextId
     );
 
-    // In order to retrieve proper error details we make a metadata request to the copy source. If we instead issue
-    // a HEAD request then the error details are not returned and reporting authentication failures to the caller
-    // becomes a black box.
-    const metadataUrl = URLBuilder.parse(copySource);
-    metadataUrl.setQueryParameter("comp", "metadata");
-    const validationResponse: AxiosResponse = await axios.get(
-      metadataUrl.toString(),
-      {
-        // Instructs axios to not throw an error for non-2xx responses
-        validateStatus: () => true
-      }
-    );
+    // The copy source may be addressed in production ("account-in-host") style, or reference a port that
+    // is only reachable outside this process (for example when Azurite is published on a mapped/random
+    // container port, or sits behind a reverse proxy). Fetching the copy source verbatim then fails even
+    // for a source that lives on this very instance. Instead we re-issue the validation request to this
+    // instance over loopback using a path-style URL built from the source account. The SAS canonical
+    // resource is account-name based, so rewriting production-style to path-style preserves any
+    // signature; and a source account that is not served by this instance still yields a non-2xx below,
+    // so the same-instance-only copy guarantee is retained. Restricting the fetch to loopback also
+    // narrows the previous behavior, which issued a GET to an arbitrary caller-supplied host.
+    //
+    // Notes: loopback is addressed as 127.0.0.1, which the default binds (127.0.0.1 and 0.0.0.0) both
+    // serve; the validation protocol is the one this instance actually listens on (from the current
+    // request), not the source URL's advertised scheme.
+    //
+    // In order to retrieve proper error details we make a metadata request to the copy source. If we
+    // instead issue a HEAD request then the error details are not returned and reporting authentication
+    // failures to the caller becomes a black box.
+    const localPort = blobCtx.request!.getLocalPort();
+    let metadataUrl: string;
+    let rewrittenToLoopback = false;
+    if (localPort !== undefined) {
+      const sourceIsProductStyle =
+        !blobCtx.disableProductStyleUrl &&
+        !IP_REGEX.test(url.hostname) &&
+        !NO_ACCOUNT_HOST_NAMES.has(url.hostname.toLowerCase()) &&
+        url.hostname.indexOf(".") > 0;
+
+      const loopbackUrl = new URL(url.toString());
+      loopbackUrl.protocol = `${blobCtx.request!.getProtocol() ||
+        url.protocol.replace(/:$/, "")}:`;
+      loopbackUrl.host = `127.0.0.1:${localPort}`;
+      loopbackUrl.pathname = sourceIsProductStyle
+        ? `/${sourceAccount}${url.pathname}`
+        : url.pathname;
+      loopbackUrl.searchParams.set("comp", "metadata");
+      metadataUrl = loopbackUrl.toString();
+      rewrittenToLoopback = true;
+    } else {
+      // Fallback when the local port cannot be determined: validate against the copy source as provided.
+      const builder = URLBuilder.parse(copySource);
+      builder.setQueryParameter("comp", "metadata");
+      metadataUrl = builder.toString();
+    }
+
+    const requestConfig: AxiosRequestConfig = {
+      // Instructs axios to not throw an error for non-2xx responses
+      validateStatus: () => true
+    };
+    if (rewrittenToLoopback && metadataUrl.startsWith("https:")) {
+      // Only the loopback validation call targets this same instance, whose certificate is self-signed;
+      // never relax certificate verification for the verbatim (caller-supplied) fallback URL.
+      requestConfig.httpsAgent = new https.Agent({ rejectUnauthorized: false });
+    }
+
+    let validationResponse: AxiosResponse;
+    try {
+      validationResponse = await axios.get(metadataUrl, requestConfig);
+    } catch (err) {
+      // A transport-level failure (the validation endpoint is unreachable) means the copy source cannot
+      // be verified. Surface a storage-style error instead of an unhandled 500, but log the underlying
+      // cause so a genuine misconfiguration remains diagnosable.
+      this.logger.error(
+        `BlobHandler:startCopyFromURL() Could not reach the copy source to validate access: ${err}`,
+        context.contextId
+      );
+      throw StorageErrorFactory.getCannotVerifyCopySource(
+        context.contextId!,
+        404,
+        "The specified resource does not exist"
+      );
+    }
     if (validationResponse.status === 200) {
       this.logger.debug(
         `BlobHandler:startCopyFromURL() Successfully validated access to source account ${sourceAccount}`,
