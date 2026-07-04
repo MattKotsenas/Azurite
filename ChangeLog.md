@@ -8,6 +8,10 @@ General:
 
 - Add `AZURITE_ACCOUNTS_FILE` to load custom storage account names and keys from a file. When set, it takes precedence over `AZURITE_ACCOUNTS` and is reloaded immediately on `SIGHUP` instead of polling on an interval; a failed reload keeps the currently loaded accounts.
 
+Table:
+
+- Fix table `$batch` operations failing with HTTP 500 ("Couldn't extract path from URL in sub-Request") when the batch is addressed production-style (account in the host, e.g. `https://{account}.table.{host}/{table}`). The sub-request URL parser assumed path-style (`/{account}/{table}`) addressing; it now handles both styles.
+
 ## 2026.06 Version 3.36.0
 
 General:

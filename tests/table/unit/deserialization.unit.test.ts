@@ -369,6 +369,95 @@ describe("batch deserialization unit tests, these are not the API integration te
     done();
   });
 
+  it("extracts the table name from both path-style and production-style sub-request URIs", (done) => {
+    // The table name is capture group [1] - the value the deserializer uses as
+    // the operation's table. Path-style puts the account in the path
+    // (/{account}/{table}); production-style puts the account in the host, so
+    // the path has a single segment (/{table}). Production-style sub-request
+    // URLs previously returned null here, failing the whole batch with a 500.
+    const cases = [
+      // path-style, entity operation (account in path)
+      {
+        uri: "http://127.0.0.1:10002/devstoreaccount1/myTable(PartitionKey='1',RowKey='1ab')",
+        table: "myTable"
+      },
+      // production-style, entity operation (account in host) - the regressed case
+      {
+        uri: "https://myaccount.table.core.windows.net/myTable(PartitionKey='1',RowKey='1ab')",
+        table: "myTable"
+      },
+      // production-style over http with an explicit port (loopback front door)
+      {
+        uri: "http://myaccount.table.127.0.0.1.nip.io:10002/Configuration(PartitionKey='part1',RowKey='row00')",
+        table: "Configuration"
+      },
+      // production-style, table-level insert (POST, no entity keys)
+      {
+        uri: "https://myaccount.table.core.windows.net/myTable",
+        table: "myTable"
+      },
+      // production-style, table-level with query string
+      {
+        uri: "https://myaccount.table.core.windows.net/myTable?%24format=application%2Fjson%3Bodata%3Dminimalmetadata",
+        table: "myTable"
+      }
+    ];
+
+    const serializationBase = new BatchSerialization();
+    cases.forEach((value) => {
+      const extractedPath = serializationBase.extractPath(value.uri);
+      assert.notStrictEqual(
+        extractedPath,
+        null,
+        `Unable to extract path from ${value.uri}`
+      );
+      assert.strictEqual(
+        extractedPath![1],
+        value.table,
+        `wrong table name parsed from ${value.uri}`
+      );
+    });
+    done();
+  });
+
+  it("deserializes a production-style (account-in-host) batch sub-request", (done) => {
+    // Regression guard for the production-style 500: the sub-request URL has a
+    // single path segment (the account is in the host). The deserializer must
+    // resolve the table name instead of throwing "Couldn't extract path".
+    const requestString =
+      SerializationRequestMockStrings.SampleProductionStyleInsertMerge;
+    const serializer = new TableBatchSerialization();
+    const batchOperationArray =
+      serializer.deserializeBatchRequest(requestString);
+
+    assert.strictEqual(
+      batchOperationArray.length,
+      2,
+      "failed to deserialize correct number of operations"
+    );
+    assert.strictEqual(
+      batchOperationArray[0].httpMethod,
+      "POST",
+      "wrong HTTP Method parsed"
+    );
+    assert.strictEqual(
+      batchOperationArray[0].path,
+      "Configuration",
+      "wrong path parsed for production-style insert"
+    );
+    assert.strictEqual(
+      batchOperationArray[1].httpMethod,
+      "MERGE",
+      "wrong HTTP Method parsed"
+    );
+    assert.strictEqual(
+      batchOperationArray[1].path,
+      "Configuration",
+      "wrong path parsed for production-style merge"
+    );
+    done();
+  });
+
   it("deserializes, mock table batch request from Go SDK containing 2 inserts correctly", (done) => {
     const requestString =
       SerializationRequestMockStrings.BatchGoSDKInsertRequestString1;
