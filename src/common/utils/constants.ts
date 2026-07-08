@@ -54,6 +54,21 @@ export const VALID_ISSUE_PREFIXES = [
   "https://sts.windows-ppe.net"
 ];
 
+// The full set of OAuth token issuer prefixes the token authenticators accept: the built-in public issuers
+// plus any supplied at runtime via the AZURITE_OAUTH_ADDITIONAL_ISSUERS environment variable (a comma-separated
+// list). This lets a test, private-cloud, or sovereign deployment trust token issuers beyond the built-in
+// public ones (for example an emulated Entra) without editing this source list. Evaluated per call so a test
+// can set the variable before exercising the authenticator; unset/empty adds nothing.
+export function getTrustedIssuePrefixes(): string[] {
+  const additional = (process.env.AZURITE_OAUTH_ADDITIONAL_ISSUERS ?? "")
+    .split(",")
+    .map((prefix) => prefix.trim())
+    .filter((prefix) => prefix.length > 0);
+  return additional.length === 0
+    ? VALID_ISSUE_PREFIXES
+    : [...VALID_ISSUE_PREFIXES, ...additional];
+}
+
 export const EMULATOR_ACCOUNT_NAME = "devstoreaccount1";
 export const EMULATOR_ACCOUNT_KEY = Buffer.from(
   "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",

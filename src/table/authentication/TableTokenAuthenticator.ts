@@ -5,7 +5,7 @@ import { OAuthLevel } from "../../common/models";
 import {
   BEARER_TOKEN_PREFIX,
   HTTPS,
-  VALID_ISSUE_PREFIXES
+  getTrustedIssuePrefixes
 } from "../../common/utils/constants";
 import TableStorageContext from "../context/TableStorageContext";
 import StorageErrorFactory from "../errors/StorageErrorFactory";
@@ -195,7 +195,7 @@ export default class TableTokenAuthenticator implements IAuthenticator {
     }
 
     let issMatch = false;
-    for (const validIssuePrefix of VALID_ISSUE_PREFIXES) {
+    for (const validIssuePrefix of getTrustedIssuePrefixes()) {
       if (iss.startsWith(validIssuePrefix)) {
         issMatch = true;
         break;

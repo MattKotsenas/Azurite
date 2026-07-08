@@ -53,6 +53,76 @@ describe("Blob OAuth Basic", () => {
     await containerClient.delete();
   });
 
+  it(`Should accept a token from an issuer configured via AZURITE_OAUTH_ADDITIONAL_ISSUERS @loki @sql`, async () => {
+    // An issuer that is neither built-in nor a public prefix, trusted only because it is configured.
+    process.env.AZURITE_OAUTH_ADDITIONAL_ISSUERS = "https://emulated-entra.example/";
+    try {
+      const token = generateJWTToken(
+        new Date("2019/01/01"),
+        new Date("2019/01/01"),
+        new Date("2100/01/01"),
+        "https://emulated-entra.example/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/",
+        "https://storage.azure.com",
+        "user_impersonation",
+        "23657296-5cd5-45b0-a809-d972a7f4dfe1",
+        "dd0d0df1-06c3-436c-8034-4b9a153097ce"
+      );
+
+      const serviceClient = new BlobServiceClient(
+        baseURL,
+        newPipeline(new SimpleTokenCredential(token), {
+          retryOptions: { maxTries: 1 },
+          keepAliveOptions: { enable: false }
+        })
+      );
+
+      const containerName: string = getUniqueName("1container-configured-issuer");
+      const containerClient = serviceClient.getContainerClient(containerName);
+
+      await containerClient.create();
+      await containerClient.delete();
+    } finally {
+      delete process.env.AZURITE_OAUTH_ADDITIONAL_ISSUERS;
+    }
+  });
+
+  it(`Should reject a token whose issuer is neither built-in nor configured @loki @sql`, async () => {
+    delete process.env.AZURITE_OAUTH_ADDITIONAL_ISSUERS;
+    const token = generateJWTToken(
+      new Date("2019/01/01"),
+      new Date("2019/01/01"),
+      new Date("2100/01/01"),
+      "https://untrusted-issuer.example/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/",
+      "https://storage.azure.com",
+      "user_impersonation",
+      "23657296-5cd5-45b0-a809-d972a7f4dfe1",
+      "dd0d0df1-06c3-436c-8034-4b9a153097ce"
+    );
+
+    const serviceClient = new BlobServiceClient(
+      baseURL,
+      newPipeline(new SimpleTokenCredential(token), {
+        retryOptions: { maxTries: 1 },
+        keepAliveOptions: { enable: false }
+      })
+    );
+
+    const containerName: string = getUniqueName("1container-untrusted-issuer");
+    const containerClient = serviceClient.getContainerClient(containerName);
+
+    let error;
+    try {
+      await containerClient.create();
+    } catch (err) {
+      error = err;
+    }
+    assert.ok(error, "a token from an untrusted issuer must be rejected");
+    assert.ok(
+      (error as any).statusCode === 401 || (error as any).statusCode === 403,
+      `expected an auth failure, got status ${(error as any).statusCode}`
+    );
+  });
+
   it(`Should work with blob batch deleting @loki @sql`, async () => {
     const token = generateJWTToken(
       new Date("2019/01/01"),
