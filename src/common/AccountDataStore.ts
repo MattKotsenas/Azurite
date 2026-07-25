@@ -88,17 +88,9 @@ export default class AccountDataStore implements IAccountDataStore {
   }
 
   /**
-   * Polls the accounts file for changes.
-   *
-   * Change events (`fs.watch`/inotify) are unavailable on the filesystems this
-   * file is most often shared across: a host directory bind-mounted into a
-   * container delivers no events, and signals are no help either because a
-   * process cannot be signalled to reload on Windows. Stat polling is the one
-   * mechanism that reports a change on every filesystem, which is why file
-   * watchers such as chokidar and `dotnet watch` fall back to it. Polling also
-   * follows the file by path, so a writer that stages a temporary file and
-   * renames it over the destination, keeping readers from ever seeing a
-   * half-written file, does not leave the reader bound to the replaced inode.
+   * Polls the file's modification time. Change events do not cross a host
+   * directory bind-mounted into a container, and polling follows the pathname,
+   * so a staged file renamed over the destination is still seen.
    */
   private watchAccountsFile(accountsFilePath: string) {
     fs.watchFile(

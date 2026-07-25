@@ -88,9 +88,7 @@ describe("AccountDataStore file-backed accounts @loki @sql", () => {
     // Precondition: the second account does not exist before the reload.
     assert.strictEqual(store.getAccount("acct2"), undefined);
 
-    // Writers stage a temporary file and rename it over the destination so a
-    // reader never observes a half-written file. The rename swaps the inode,
-    // so a watcher bound to the old file would go deaf here.
+    // Replace the file by rename-over, as an atomic writer does.
     const staged = `${filePath}.tmp`;
     fs.writeFileSync(staged, `acct1:${b64("key-one")};acct2:${b64("key-two")}`);
     fs.renameSync(staged, filePath);
@@ -102,7 +100,6 @@ describe("AccountDataStore file-backed accounts @loki @sql", () => {
       store.getAccount("acct2")?.key1,
       Buffer.from(b64("key-two"), "base64")
     );
-    // The originally-loaded account survives the reload.
     assert.strictEqual(store.getAccount("acct1")?.name, "acct1");
   });
 
@@ -129,16 +126,25 @@ describe("AccountDataStore file-backed accounts @loki @sql", () => {
 
     store = new AccountDataStore(nopLogger);
     await store.init();
-    await store.close();
 
+    // Prove the watcher is live before closing it, so a later no-op cannot be
+    // mistaken for a watcher that stopped.
     fs.writeFileSync(
       filePath,
       `acct1:${b64("key-one")};acct2:${b64("key-two")}`
     );
-    // Give any surviving watcher more than enough time to deliver a reload.
+    await waitFor(() => store!.getAccount("acct2") !== undefined);
+
+    await store.close();
+
+    fs.writeFileSync(
+      filePath,
+      `acct1:${b64("key-one")};acct2:${b64("key-two")};acct3:${b64("key-three")}`
+    );
+    // Wait for three polling intervals.
     await new Promise(resolve => setTimeout(resolve, 1500));
 
-    assert.strictEqual(store.getAccount("acct2"), undefined);
+    assert.strictEqual(store.getAccount("acct3"), undefined);
     store = undefined;
   });
 
@@ -148,14 +154,22 @@ describe("AccountDataStore file-backed accounts @loki @sql", () => {
 
     store = new AccountDataStore(nopLogger);
     await store.init();
-    assert.ok(store.getAccount("acct1")); // precondition
+
+    // Prove reloads are reaching the store, so retention below is the failed
+    // reload's doing rather than a watcher that never fired.
+    fs.writeFileSync(
+      filePath,
+      `acct1:${b64("key-one")};acct2:${b64("key-two")}`
+    );
+    await waitFor(() => store!.getAccount("acct2") !== undefined);
 
     fs.rmSync(filePath);
-    // Let the reload observe the missing file rather than racing it.
+    // Wait for three polling intervals after removal.
     await new Promise(resolve => setTimeout(resolve, 1500));
 
     // Accounts are retained rather than dropped to the built-in default.
     assert.strictEqual(store.getAccount("acct1")?.name, "acct1");
+    assert.strictEqual(store.getAccount("acct2")?.name, "acct2");
     assert.strictEqual(store.getAccount("devstoreaccount1"), undefined);
   });
 

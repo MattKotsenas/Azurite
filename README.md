@@ -535,9 +535,7 @@ Alternatively, you can provide the same `account1:key1[:key2];account2:key1[:key
 set AZURITE_ACCOUNTS_FILE=/run/secrets/azurite-accounts
 ```
 
-`AZURITE_ACCOUNTS_FILE` takes precedence over `AZURITE_ACCOUNTS`. When it is set, Azurite watches the file and reloads the accounts shortly after it changes. This makes it easy to add storage accounts or rotate keys on the fly - for example when the file is a mounted secret managed by another process - without restarting Azurite.
-
-The file is watched by polling its modification time, so the reload works on every platform and on filesystems that report no change events, such as a host directory bind-mounted into a container. Writers should stage a temporary file and rename it over the destination so Azurite never reads a partial write.
+`AZURITE_ACCOUNTS_FILE` takes precedence over `AZURITE_ACCOUNTS`. Azurite watches the file and reloads the accounts shortly after it changes, so accounts can be added and keys rotated without restarting Azurite. Stage a temporary file and rename it over the destination so Azurite never reads a partial write.
 
 If the file cannot be read or parsed during a reload, Azurite keeps the accounts it already has so a transient or malformed write does not drop live accounts. If the file cannot be read at startup, Azurite fails to start rather than silently falling back to the default `devstoreaccount1` account.
 
