@@ -7,6 +7,7 @@ import {
 import ILogger from "../queue/generated/utils/ILogger";
 import IAccountDataStore, { IAccountProperties } from "./IAccountDataStore";
 import {
+  ACCOUNTS_FILE_POLL_INTERVAL,
   AZURITE_ACCOUNTS_ENV,
   AZURITE_ACCOUNTS_FILE_ENV,
   DEFAULT_ACCOUNTS_REFRESH_INTERVAL
@@ -33,6 +34,7 @@ const DEFAULT_EMULATOR_ACCOUNTS: IAccounts = {
 export default class AccountDataStore implements IAccountDataStore {
   private status: Status = Status.Closed;
   private timer: any;
+  private watchedFilePath: string | undefined;
   private accounts: IAccounts = DEFAULT_EMULATOR_ACCOUNTS;
   private readonly reloadListener = () => this.refresh();
 
@@ -49,10 +51,9 @@ export default class AccountDataStore implements IAccountDataStore {
   public async init(): Promise<void> {
     this.refresh(true);
 
-    if (process.env[AZURITE_ACCOUNTS_FILE_ENV]) {
-      // When accounts are sourced from a file, apply changes immediately by
-      // reloading on SIGHUP rather than polling on an interval.
-      process.on("SIGHUP", this.reloadListener);
+    const accountsFilePath = process.env[AZURITE_ACCOUNTS_FILE_ENV];
+    if (accountsFilePath) {
+      this.watchAccountsFile(accountsFilePath);
     } else {
       this.timer = setInterval(() => {
         this.refresh();
@@ -71,7 +72,10 @@ export default class AccountDataStore implements IAccountDataStore {
     if (this.timer !== undefined) {
       clearInterval(this.timer);
     }
-    process.removeListener("SIGHUP", this.reloadListener);
+    if (this.watchedFilePath !== undefined) {
+      fs.unwatchFile(this.watchedFilePath, this.reloadListener);
+      this.watchedFilePath = undefined;
+    }
     this.status = Status.Closed;
   }
 
@@ -81,6 +85,28 @@ export default class AccountDataStore implements IAccountDataStore {
 
   public async clean(): Promise<void> {
     /* NOOP */
+  }
+
+  /**
+   * Polls the accounts file for changes.
+   *
+   * Change events (`fs.watch`/inotify) are unavailable on the filesystems this
+   * file is most often shared across: a host directory bind-mounted into a
+   * container delivers no events, and signals are no help either because a
+   * process cannot be signalled to reload on Windows. Stat polling is the one
+   * mechanism that reports a change on every filesystem, which is why file
+   * watchers such as chokidar and `dotnet watch` fall back to it. Polling also
+   * follows the file by path, so a writer that stages a temporary file and
+   * renames it over the destination, keeping readers from ever seeing a
+   * half-written file, does not leave the reader bound to the replaced inode.
+   */
+  private watchAccountsFile(accountsFilePath: string) {
+    fs.watchFile(
+      accountsFilePath,
+      { interval: ACCOUNTS_FILE_POLL_INTERVAL },
+      this.reloadListener
+    );
+    this.watchedFilePath = accountsFilePath;
   }
 
   private refresh(initialLoad = false) {

@@ -28,9 +28,20 @@ const nopLogger: ILogger = {
 // AZURITE_ACCOUNTS values are base64-encoded keys.
 const b64 = (s: string) => Buffer.from(s).toString("base64");
 
-// Synchronously invoke the process SIGHUP handlers (does not send an OS signal).
-const emitSighup = () =>
-  (process.emit as unknown as (event: string) => boolean)("SIGHUP");
+// Filesystem change events are delivered asynchronously, so poll for the
+// expected state instead of assuming it has landed by the next tick.
+const waitFor = async (
+  condition: () => boolean,
+  timeoutMs = 5000
+): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) {
+      throw new Error("Timed out waiting for the accounts file reload.");
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+};
 
 describe("AccountDataStore file-backed accounts @loki @sql", () => {
   let dir: string;
@@ -68,7 +79,7 @@ describe("AccountDataStore file-backed accounts @loki @sql", () => {
     assert.strictEqual(store.getAccount("devstoreaccount1"), undefined);
   });
 
-  it("reloads added accounts from the file on SIGHUP @loki @sql", async () => {
+  it("reloads added accounts when the file is replaced by rename @loki @sql", async () => {
     fs.writeFileSync(filePath, `acct1:${b64("key-one")}`);
     process.env[AZURITE_ACCOUNTS_FILE_ENV] = filePath;
 
@@ -77,19 +88,58 @@ describe("AccountDataStore file-backed accounts @loki @sql", () => {
     // Precondition: the second account does not exist before the reload.
     assert.strictEqual(store.getAccount("acct2"), undefined);
 
-    fs.writeFileSync(
-      filePath,
-      `acct1:${b64("key-one")};acct2:${b64("key-two")}`
-    );
-    emitSighup();
+    // Writers stage a temporary file and rename it over the destination so a
+    // reader never observes a half-written file. The rename swaps the inode,
+    // so a watcher bound to the old file would go deaf here.
+    const staged = `${filePath}.tmp`;
+    fs.writeFileSync(staged, `acct1:${b64("key-one")};acct2:${b64("key-two")}`);
+    fs.renameSync(staged, filePath);
+
+    await waitFor(() => store!.getAccount("acct2") !== undefined);
 
     assert.strictEqual(store.getAccount("acct2")?.name, "acct2");
     assert.deepStrictEqual(
       store.getAccount("acct2")?.key1,
       Buffer.from(b64("key-two"), "base64")
     );
-    // The originally-loaded account is still present.
+    // The originally-loaded account survives the reload.
     assert.strictEqual(store.getAccount("acct1")?.name, "acct1");
+  });
+
+  it("reloads added accounts when the file is written in place @loki @sql", async () => {
+    fs.writeFileSync(filePath, `acct1:${b64("key-one")}`);
+    process.env[AZURITE_ACCOUNTS_FILE_ENV] = filePath;
+
+    store = new AccountDataStore(nopLogger);
+    await store.init();
+    assert.strictEqual(store.getAccount("acct2"), undefined); // precondition
+
+    fs.writeFileSync(
+      filePath,
+      `acct1:${b64("key-one")};acct2:${b64("key-two")}`
+    );
+
+    await waitFor(() => store!.getAccount("acct2") !== undefined);
+    assert.strictEqual(store.getAccount("acct2")?.name, "acct2");
+  });
+
+  it("stops watching the file on close @loki @sql", async () => {
+    fs.writeFileSync(filePath, `acct1:${b64("key-one")}`);
+    process.env[AZURITE_ACCOUNTS_FILE_ENV] = filePath;
+
+    store = new AccountDataStore(nopLogger);
+    await store.init();
+    await store.close();
+
+    fs.writeFileSync(
+      filePath,
+      `acct1:${b64("key-one")};acct2:${b64("key-two")}`
+    );
+    // Give any surviving watcher more than enough time to deliver a reload.
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    assert.strictEqual(store.getAccount("acct2"), undefined);
+    store = undefined;
   });
 
   it("keeps current accounts when the file is unreadable on reload @loki @sql", async () => {
@@ -101,25 +151,12 @@ describe("AccountDataStore file-backed accounts @loki @sql", () => {
     assert.ok(store.getAccount("acct1")); // precondition
 
     fs.rmSync(filePath);
-    emitSighup();
+    // Let the reload observe the missing file rather than racing it.
+    await new Promise(resolve => setTimeout(resolve, 1500));
 
     // Accounts are retained rather than dropped to the built-in default.
     assert.strictEqual(store.getAccount("acct1")?.name, "acct1");
     assert.strictEqual(store.getAccount("devstoreaccount1"), undefined);
-  });
-
-  it("removes its SIGHUP listener on close @loki @sql", async () => {
-    fs.writeFileSync(filePath, `acct1:${b64("key-one")}`);
-    process.env[AZURITE_ACCOUNTS_FILE_ENV] = filePath;
-
-    const before = process.listenerCount("SIGHUP");
-    store = new AccountDataStore(nopLogger);
-    await store.init();
-    assert.strictEqual(process.listenerCount("SIGHUP"), before + 1);
-
-    await store.close();
-    store = undefined;
-    assert.strictEqual(process.listenerCount("SIGHUP"), before);
   });
 
   it("still honors AZURITE_ACCOUNTS when no file is configured @loki @sql", async () => {

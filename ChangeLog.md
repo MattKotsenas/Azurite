@@ -6,7 +6,7 @@
 
 General:
 
-- Add `AZURITE_ACCOUNTS_FILE` to load custom storage account names and keys from a file. When set, it takes precedence over `AZURITE_ACCOUNTS` and is reloaded immediately on `SIGHUP` instead of polling on an interval; a failed reload keeps the currently loaded accounts.
+- Add `AZURITE_ACCOUNTS_FILE` to load custom storage account names and keys from a file. When set, it takes precedence over `AZURITE_ACCOUNTS`, and the file is watched so changes apply without a restart; a failed reload keeps the currently loaded accounts.
 
 Table:
 

@@ -1,6 +1,7 @@
 export const AZURITE_ACCOUNTS_ENV = "AZURITE_ACCOUNTS"; // Customize account name and keys by env
-export const AZURITE_ACCOUNTS_FILE_ENV = "AZURITE_ACCOUNTS_FILE"; // Path to a file holding the account name/keys string; reloaded on SIGHUP
+export const AZURITE_ACCOUNTS_FILE_ENV = "AZURITE_ACCOUNTS_FILE"; // Path to a file holding the account name/keys string; watched for changes
 export const DEFAULT_ACCOUNTS_REFRESH_INTERVAL = 60 * 1000; // 60s
+export const ACCOUNTS_FILE_POLL_INTERVAL = 500; // ms; how often AZURITE_ACCOUNTS_FILE is checked for changes
 export const DEFAULT_FD_CACHE_NUMBER = 100;
 export const FD_CACHE_NUMBER_MIN = 1;
 export const FD_CACHE_NUMBER_MAX = 100;
