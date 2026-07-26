@@ -137,7 +137,14 @@ export default class AccountDataStore implements IAccountDataStore {
   private refreshFromFile(accountsFilePath: string, initialLoad: boolean) {
     try {
       const content = fs.readFileSync(accountsFilePath, { encoding: "utf8" });
-      this.accounts = this.parserAccountsEnvironmentString(content);
+      const accounts = this.parserAccountsEnvironmentString(content);
+      if (Object.keys(accounts).length === 0) {
+        // An empty file parses without error, so it would otherwise replace every loaded
+        // account and fail each request that follows. Treat it as a bad read.
+        throw new Error(`Accounts file ${accountsFilePath} defines no accounts.`);
+      }
+
+      this.accounts = accounts;
       this.logger.info(
         `AccountDataStore:refresh() Loaded accounts from file ${accountsFilePath}.`
       );

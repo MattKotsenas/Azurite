@@ -173,6 +173,30 @@ describe("AccountDataStore file-backed accounts @loki @sql", () => {
     assert.strictEqual(store.getAccount("devstoreaccount1"), undefined);
   });
 
+  it("keeps current accounts when the file is emptied @loki @sql", async () => {
+    fs.writeFileSync(filePath, `acct1:${b64("key-one")}`);
+    process.env[AZURITE_ACCOUNTS_FILE_ENV] = filePath;
+
+    store = new AccountDataStore(nopLogger);
+    await store.init();
+
+    // Prove reloads are reaching the store before relying on one not to.
+    fs.writeFileSync(
+      filePath,
+      `acct1:${b64("key-one")};acct2:${b64("key-two")}`
+    );
+    await waitFor(() => store!.getAccount("acct2") !== undefined);
+
+    fs.writeFileSync(filePath, "");
+    // Wait for three polling intervals.
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    // An empty file parses cleanly, so without a guard it would drop every account.
+    assert.strictEqual(store.getAccount("acct1")?.name, "acct1");
+    assert.strictEqual(store.getAccount("acct2")?.name, "acct2");
+    assert.strictEqual(store.getAccount("devstoreaccount1"), undefined);
+  });
+
   it("still honors AZURITE_ACCOUNTS when no file is configured @loki @sql", async () => {
     process.env["AZURITE_ACCOUNTS"] = `envacct:${b64("env-key")}`;
     try {
